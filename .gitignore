@@ -4,4 +4,6 @@ CLAUDE.local.md
 node_modules/
 .next/
 prisma/dev.db
-.env
+src/generated/
+.claude/
+next-env.d.ts

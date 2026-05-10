@@ -7,3 +7,5 @@ prisma/dev.db
 src/generated/
 .claude/
 next-env.d.ts
+.playwright-mcp/
+logs.txt

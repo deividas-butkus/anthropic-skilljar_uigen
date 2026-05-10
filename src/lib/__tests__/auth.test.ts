@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { test, expect, vi, beforeEach, afterEach } from "vitest";
-import { SignJWT } from "jose";
+import { SignJWT, decodeJwt, decodeProtectedHeader } from "jose";
 
 vi.mock("server-only", () => ({}));
 
@@ -71,6 +71,97 @@ test("createSession sets cookie with httpOnly and 7-day expiry", async () => {
   const expiresMs = opts.expires.getTime();
   expect(expiresMs).toBeGreaterThanOrEqual(before + sevenDaysMs - 1000);
   expect(expiresMs).toBeLessThanOrEqual(after + sevenDaysMs + 1000);
+});
+
+test("createSession signs the JWT with HS256", async () => {
+  const { createSession } = await importAuth();
+
+  await createSession("u1", "a@b.com");
+
+  const token = cookieStore.store.get(COOKIE_NAME)!.value;
+  const header = decodeProtectedHeader(token);
+  expect(header.alg).toBe("HS256");
+});
+
+test("createSession encodes userId, email, expiresAt, iat, and exp into the JWT payload", async () => {
+  const { createSession } = await importAuth();
+
+  const before = Math.floor(Date.now() / 1000);
+  await createSession("user-xyz", "carol@example.com");
+  const after = Math.floor(Date.now() / 1000);
+
+  const token = cookieStore.store.get(COOKIE_NAME)!.value;
+  const payload = decodeJwt(token) as Record<string, unknown> & {
+    userId: string;
+    email: string;
+    expiresAt: string;
+    iat: number;
+    exp: number;
+  };
+
+  expect(payload.userId).toBe("user-xyz");
+  expect(payload.email).toBe("carol@example.com");
+  expect(typeof payload.expiresAt).toBe("string");
+  expect(Number.isFinite(Date.parse(payload.expiresAt))).toBe(true);
+
+  expect(payload.iat).toBeGreaterThanOrEqual(before);
+  expect(payload.iat).toBeLessThanOrEqual(after);
+
+  const sevenDaysSec = 7 * 24 * 60 * 60;
+  expect(payload.exp - payload.iat).toBe(sevenDaysSec);
+});
+
+test("createSession marks the cookie secure in production", async () => {
+  vi.stubEnv("NODE_ENV", "production");
+  const { createSession } = await importAuth();
+
+  await createSession("u1", "a@b.com");
+
+  const opts = cookieStore.store.get(COOKIE_NAME)!.options as {
+    secure: boolean;
+  };
+  expect(opts.secure).toBe(true);
+});
+
+test("createSession leaves cookie insecure outside production", async () => {
+  vi.stubEnv("NODE_ENV", "development");
+  const { createSession } = await importAuth();
+
+  await createSession("u1", "a@b.com");
+
+  const opts = cookieStore.store.get(COOKIE_NAME)!.options as {
+    secure: boolean;
+  };
+  expect(opts.secure).toBe(false);
+});
+
+test("createSession overwrites a previously set auth-token cookie", async () => {
+  const { createSession } = await importAuth();
+
+  await createSession("first", "first@example.com");
+  const firstToken = cookieStore.store.get(COOKIE_NAME)!.value;
+
+  await createSession("second", "second@example.com");
+  const secondToken = cookieStore.store.get(COOKIE_NAME)!.value;
+
+  expect(secondToken).not.toBe(firstToken);
+  expect(cookieStore.store.size).toBe(1);
+
+  const payload = decodeJwt(secondToken) as { userId: string; email: string };
+  expect(payload.userId).toBe("second");
+  expect(payload.email).toBe("second@example.com");
+});
+
+test("createSession produces distinct tokens for different users", async () => {
+  const { createSession } = await importAuth();
+
+  await createSession("alice", "alice@example.com");
+  const aliceToken = cookieStore.store.get(COOKIE_NAME)!.value;
+
+  await createSession("bob", "bob@example.com");
+  const bobToken = cookieStore.store.get(COOKIE_NAME)!.value;
+
+  expect(aliceToken).not.toBe(bobToken);
 });
 
 test("getSession returns null when no cookie is set", async () => {
